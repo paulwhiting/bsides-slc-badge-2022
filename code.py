@@ -452,17 +452,11 @@ def mines(cursor):
 
     items.remove(cursor.ptr)
 
-def pong(cursor):
-    items = displayio.Group()
-    cursor.update()
-    pass
-
 main_menu = Menu("BSidesSLC 2022", OrderedDict([
     ("Eyes", eyes),
     ("Mines", mines),
     ("Running LED", running_light),        
     #("Single LED", single_light),
-    ("Pong", pong),
 ]))
 
 main_menu.run()
