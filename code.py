@@ -3,6 +3,7 @@ import busio
 import displayio
 import time
 import math
+import random
 import struct
 import binascii
 import terminalio
@@ -33,21 +34,12 @@ displayio.release_displays()
 display_bus = displayio.FourWire(spi, command=board.GP5, chip_select=board.GP7, reset=board.GP6)
 display = ST7735R(display_bus, width=DISPLAY_WIDTH, height=DISPLAY_HEIGHT, colstart=24, rotation=270, backlight_pin=board.GP8)
 
+font = terminalio.FONT
+
 i2c = busio.I2C(board.GP17, board.GP16)
 
-# Make the display context
-testdata = displayio.Group()
-display.show(testdata)
-
-joy_pos = Circle(54, 38, 5, fill=0xFF0000)
-acc_pos = Circle(116, 36, 5, fill=0xFF0000)
-acc_z = Rect(156, 4, 4, 2, fill=0x808080)
-bitmap = displayio.OnDiskBitmap("/eyebg.bmp")
-tile_grid = displayio.TileGrid(bitmap, pixel_shader=bitmap.pixel_shader)
-testdata.append(tile_grid)
-testdata.append(joy_pos)
-testdata.append(acc_pos)
-#testdata.append(acc_z)
+INPUT_DELAY = 0.05
+LED_COUNT = 12
 
 try:
     joy = Joystick(i2c)
@@ -79,45 +71,15 @@ except RuntimeError as e:
     print(e)
     accel = None
 
-c=0
-running = True
-if joy:
-    jp = joy.getPos()
-
-while running:
-    if led_controller:     
-        for i in range(12):
-            m = 127.0
-            v = int(m+m*math.sin(c+i*.5))
-            led_controller.setLed(i, v)
-        c+=.3
-        if c > 2* math.pi:
-            c -= 2*math.pi
-        led_controller.refresh()
-    if joy:
-        jp = joy.getPos()
-        running = jp['Button']
-        joy_pos.x0 = 54 + jp['X']//32
-        joy_pos.y0 = 38 + jp['Y']//32
-        joy_pos.fill = 0x00FF00 if not jp['Button'] else 0x202020
-    if accel:
-        al = accel.get_values()
-        acc_pos.fill = 0x00FF00 if not btn.value else 0x202020
-        acc_pos.x0 = 116 + al['X']//64
-        acc_pos.y0 = 36 + al['Y']//64
-        acc_z.y = 40 + al['Z']//64
-    time.sleep(.025)
-
-
-PRESSED_SHORT = 1
-PRESSED_LONG = 2
-
 class Button:
+    PRESSED_SHORT = 1
+    PRESSED_LONG = 2
+
     def __init__(self, joy):
         self.joy = joy
         self.registered = False
         self.waiting_for_release = False
-        self.long_press_delay = 1.5
+        self.long_press_delay = 0.4
 
     def pressed(self):
         self._read()
@@ -137,13 +99,13 @@ class Button:
             if self._depressed():
                 if diff >= self.long_press_delay:
                     self.registered = False
-                    return PRESSED_LONG
+                    return Button.PRESSED_LONG
             else:
                 self.registered = False
                 if diff < self.long_press_delay:
-                    return PRESSED_SHORT
+                    return Button.PRESSED_SHORT
                 else:
-                    return PRESSED_LONG
+                    return Button.PRESSED_LONG
         return False
 
     def _read(self):
@@ -153,12 +115,72 @@ class Button:
                 self.registered = time.monotonic()
 
     def _depressed(self):
+        if not self.joy:
+            return False
         pressed = not self.joy.getPos()['Button']
         if not pressed:
             self.waiting_for_release = False
         return pressed
 
 joy_button = Button(joy)
+
+
+def eyes(cursor):
+    eye_color = 0
+    colors = [0x000000, 0xFF0000, 0xffa000, 0xFFFF00, 0x00FF00, 0x0000FF, 0xFF00FF]
+    # Make the display context
+    testdata = displayio.Group()
+    display.show(testdata)
+
+    joy_pos = Circle(54, 38, 5, fill=colors[eye_color])
+    acc_pos = Circle(116, 36, 5, fill=colors[eye_color])
+    acc_z = Rect(156, 4, 4, 2, fill=0x808080)
+    bitmap = displayio.OnDiskBitmap("/eyebg.bmp")
+    tile_grid = displayio.TileGrid(bitmap, pixel_shader=bitmap.pixel_shader)
+    testdata.append(tile_grid)
+    testdata.append(joy_pos)
+    testdata.append(acc_pos)
+    #testdata.append(acc_z)
+
+
+    c=0
+    running = True
+    if joy:
+        jp = joy.getPos()
+
+    while running:
+        if led_controller:     
+            for i in range(12):
+                m = 127.0
+                v = int(m+m*math.sin(c+i*.5))
+                led_controller.setLed(i, v)
+            c+=.3
+            if c > 2* math.pi:
+                c -= 2*math.pi
+            led_controller.refresh()
+        if joy:
+            jp = joy.getPos()
+            press = joy_button.multi_pressed()
+            if press:
+                if press == Button.PRESSED_SHORT:
+                    eye_color = (eye_color+1)%len(colors)
+                    joy_pos.fill = colors[eye_color]
+                    acc_pos.fill = colors[eye_color]
+                else:
+                    running = False
+            joy_pos.x0 = 54 + jp['X']//32
+            joy_pos.y0 = 38 + jp['Y']//32
+        if accel:
+            al = accel.get_values()
+            acc_pos.fill = 0x00FF00 if not btn.value else 0x202020
+            acc_pos.x0 = 116 + al['X']//64
+            acc_pos.y0 = 36 + al['Y']//64
+            acc_z.y = 40 + al['Z']//64
+        time.sleep(.025)
+
+
+eyes(None)
+
 
 
 class Cursor:
@@ -181,12 +203,11 @@ class Cursor:
 
         self.ptr.x = self.x - self.size
         self.ptr.y = self.y - self.size
-    
+
+def center_offset(text):
+    return (DISPLAY_WIDTH - len(text) * 6) // 2
 
 class Menu:
-    EXIT = 0
-    REDRAW = 1
-    
     def __init__(self, title, options):
         self.title = title
         self.options = options
@@ -195,50 +216,50 @@ class Menu:
         self.y_size = 15
         self.group = None
         
-    def display(self, ptr):
+    def display(self, cursor):
         font = terminalio.FONT
         items = displayio.Group()
-        items.append(ptr.ptr)
-        items.append(Label(font, text=self.title, x=5, y=5, color=0x00FF00))
+        items.append(cursor.ptr)
+        items.append(Label(font, text=self.title, x=center_offset(self.title), y=5, color=0x00FF00))
         i = 0
         for k in self.options:
             if i >= 5:
-                l = Label(font, text=k, x=80, y=self.y_off+(i-5)*self.y_size, color=0xFFFF00)
+                # +5 for the y offset to position the text correctly
+                l = Label(font, text=k, x=80, y=self.y_off+(i-5)*self.y_size+5, color=0xFFFF00)
                 self.labels.append(l)
                 items.append(l)
             else:
-                l = Label(font, text=k, x=0, y=self.y_off+i*self.y_size, color=0xFFFF00)
+                # +5 for the y offset to position the text correctly
+                l = Label(font, text=k, x=80, y=self.y_off+(i-5)*self.y_size+5, color=0xFFFF00)
+                l = Label(font, text=k, x=0, y=self.y_off+i*self.y_size+5, color=0xFFFF00)
                 self.labels.append(l)
                 items.append(l)
             i += 1
 
         display.show(items)
         self.group = items
-        
-    def run(self):
-        ptr = Cursor(joy)
-        self.display(ptr)
-        while joy_button.pressed():
-            time.sleep(0.01)
-        while True:
-            time.sleep(0.10)
-            ptr.update()
-            if joy_button.pressed():
-                if ptr.x < 80:
-                    i = int((ptr.y - self.y_off)/self.y_size)
 
-                    fn = self.options[list(self.options)[i]]
-                    if fn == None:
-                        break
-                    else:
-                        redraw = fn()
-                        redraw = True
-                        if redraw is not None:
-                            if redraw == Menu.EXIT:
-                                break
-                            else:
-                                #self.display(ptr)
-                                display.show(self.group)
+    def run(self):
+        cursor = Cursor(joy)
+        self.display(cursor)
+        while joy_button.pressed():
+            time.sleep(INPUT_DELAY)
+        while True:
+            time.sleep(INPUT_DELAY)
+            cursor.update()
+            if joy_button.pressed():
+                if cursor.x < 80 and cursor.y >= self.y_off:
+                    i = int((cursor.y - self.y_off)/self.y_size)
+
+                    if i < len(self.options):
+                        fn = self.options[list(self.options)[i]]
+                        if fn == None:
+                            break
+                        else:
+                            self.group.remove(cursor.ptr)
+                            fn(cursor)
+                            self.group.append(cursor.ptr)
+                            display.show(self.group)
 
 
 
@@ -251,7 +272,7 @@ def turn_off_lights():
 
 
 light = 0
-def single_light():
+def single_light(cursor):
     global light
     for i in range(LED_COUNT):
         if i == light:
@@ -262,23 +283,17 @@ def single_light():
     light = (light+1) % LED_COUNT
     
 
-def running_light():
+def running_light(cursor):
     global light
-    font = terminalio.FONT
     items = displayio.Group()
     items.append(Label(font, text="Short press for speed.", x=0, y=5, color=0xFFFFFF))
     items.append(Label(font, text="Long press to exit.", x=0, y=20, color=0xFFFFFF))
     display.show(items)
     speed = 0
-    speeds = [1000,500,250,100,50,25,10,0]
+    speeds = [1000,500,250,100,50,25,10,1]
     #while not joy_button.pressed():
-    while True:
-        press = joy_button.multi_pressed()
-        if press:
-            if press == PRESSED_SHORT:
-                speed = (speed+1)%len(speeds)
-            else:
-                break
+    running = True
+    while running:
         for i in range(LED_COUNT):
             if i == light:
                 led_controller.setLed(i,100)
@@ -286,124 +301,168 @@ def running_light():
                 led_controller.setLed(i,5)
         led_controller.refresh()
         light = (light+1) % LED_COUNT
-        time.sleep(speeds[speed]/1000.0)
+        left = speeds[speed]/1000.0
+        while left:
+            to_sleep = min(INPUT_DELAY, left)
+            time.sleep(to_sleep)
+            left -= to_sleep
+            press = joy_button.multi_pressed()
+            if press:
+                if press == Button.PRESSED_SHORT:
+                    speed = (speed+1)%len(speeds)
+                else:
+                    running = False
+                break
 
 
-def bubble():
-    size = 5
-    x = DISPLAY_WIDTH / 2
-    y = DISPLAY_HEIGHT / 2
-    items = displayio.Group()
-    acc_pos = Circle(x, y, size, fill=0xFFFF00)
-    items.append(acc_pos)
-    display.show(items)
-    while not joy_button.pressed():
-        al = accel.get_values()
-        #acc_pos.x0 = 116 + al['X']//64
-        #acc_pos.y0 = 36 + al['Y']//64
-        #acc_z.y = 40 + al['Z']//64
+def mines(cursor):
+    size = 16
+    width = int(DISPLAY_WIDTH / size)
+    height = int(DISPLAY_HEIGHT / size)
+    area = width*height
+    count = 7
+    non_mines = area - count
+    x_offset = 5  # text offset
+    y_offset = 6  # text offset
 
-        vals = mems.get_values()
-        newx = x + (al['Y'] / 1000.0) * 10
-        newx = max(newx, size)
-        newx = min(newx, DISPLAY_WIDTH - size)
-        newy = y + (al['X'] / 1000.0) * 10
-        newy = max(newy, size)
-        newy = min(newy, DISPLAY_HEIGHT - size)
+    mines = []
 
-
-class Guesser():
-    def __init__(self):
-        self.answer = random.choice(range(0,255))
-        self.attempts = 0
- 
-    def check_number(self):
-        val = read_switch_int()
-        tft1.fill(0)
-        if self.answer == val:
-            tft1.text(font, f"You got it!  ({self.answer})   ", 0, 20, st7789.YELLOW)
-            return Menu.EXIT
-        elif val < self.answer:
-            tft1.text(font, f"Too low                   ", 0, 20, st7789.YELLOW)
+    for i in range(LED_COUNT):
+        if i < count:
+            led_controller.setLed(i, 255)
         else:
-            tft1.text(font, f"Too high                  ", 0, 20, st7789.YELLOW)
+            led_controller.setLed(i, 0)
+    led_controller.refresh()
 
-    @staticmethod
-    def run():
-        g = Guesser()
-        tft0.fill(0)
-        tft0.text(font, "Guess the number 0-255...   ", 0, 20, st7789.YELLOW)
-        menu = Menu("Guess the #", OrderedDict([
-            ("guess", g.check_number),
-            ("back", None),
-        ]))
-        menu.run()
-        return Menu.REDRAW
+    class Location:
+        def __init__(self, x, y, is_mine):
+            self.neighbors = 0
+            self.mine = is_mine
+            self.x = x
+            self.y = y
+            self.rect = Rect(x*size, y*size, size-1, size-1, fill=0x808080)
+            self.revealed = False
+            self.flagged = False
 
+        def increment_count(self):
+            self.neighbors += 1
 
-color = 0
-colors = [
-    0x000000,
-    0xFF0000,
-    0xFFFF00,
-    0x00FF00,
-    0x00FFFF,
-    0x0000FF,
-    0xFFFFFF,
-]
+        def flag(self):
+            nonlocal count
+            if self.revealed:
+                return
+            if self.flagged:
+                self.rect.fill = 0x808080
+                self.flagged = False
+                if count >= 0:
+                    led_controller.setLed(count, 255)
+                count += 1
+            else:
+                self.rect.fill = 0xFF8080
+                self.flagged = True
+                count -= 1
+                if count >= 0:
+                    led_controller.setLed(count, 0)
+            led_controller.refresh()
 
-def fill():
-    global color
-    color = (color+1)%len(colors)
+        def reveal(self, items):
+            to_reveal = []
+            revealed = 0
+            if not self.revealed:
+                if self.flagged:
+                    self.flag()
+                if self.mine:
+                    # boom
+                    revealed = -1
+                    self.rect.fill = 0xFF0000
+                else:
+                    self.revealed = True
+                    revealed = 1
+                    self.rect.fill = 0x202020
+                    if self.neighbors > 0:
+                        items.append(Label(font, text=str(self.neighbors), x=self.x*size+x_offset, y=self.y*size+y_offset, color=0x00FF00))
+                    else:
+                        for x in [-1, 0, 1]:
+                            for y in [-1, 0, 1]:
+                                newx = self.x + x
+                                newy = self.y + y
+                                if newx >= 0 and newx < width and newy >= 0 and newy < height:
+                                    to_reveal.append(mines[newx][newy])
+            return revealed, to_reveal
+                    
+
     items = displayio.Group()
-    items.append(Rect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, fill=colors[color]))
+
+    for x in range(width):
+        col = []
+        for y in range(height):
+            col.append(Location(x, y, False))
+        mines.append(col)
+
+    available = list(range(area))
+    for n in range(count):
+        loc = random.choice(available)
+        available.remove(loc)
+        x = int(loc % width)
+        y = int(loc / width)
+        mines[x][y] = Location(x, y, True)
+
+    for col in mines:
+        for item in col:
+            items.append(item.rect)
+            if item.mine:
+                for x in [-1, 0, 1]:
+                    for y in [-1, 0, 1]:
+                        newx = item.x + x
+                        newy = item.y + y
+                        if newx >= 0 and newx < width and newy >= 0 and newy < height:
+                            mines[newx][newy].increment_count()
+
+    items.append(cursor.ptr)
     display.show(items)
 
-def video():
-    total = 0
-    for i in range(1,76):
-        a = utime.ticks_ms()
-        if i < 10:
-            i = f"0{i}"
-        tft1.jpg(f'video/video-{i}.jpg', 0, 0)
-        b = utime.ticks_ms()
-        print(b-a)
-        total += (b-a)
-    print(76.0/total)
+    while True:
+        press = joy_button.multi_pressed()
+        if press:
+            x = cursor.x // size
+            y = cursor.y // size
+            if x < width and y < height:
+                if press == Button.PRESSED_SHORT:
+                    x = cursor.x // size
+                    y = cursor.y // size
+                    if x < width and y < height:
+                        to_reveal = [mines[x][y]]
+                    while to_reveal:
+                        item = to_reveal.pop()
+                        revealed, reveal_mines = item.reveal(items)
+                        if revealed == -1:
+                            non_mines = -1
+                            break
+                        non_mines -= revealed
+                        to_reveal += reveal_mines
+                    if non_mines <= 0:
+                        text = "You won!" if non_mines == 0 else "You lost!"
+                        display.show(Label(font, text=text, x=center_offset(text), y=40, color=0xFFFFFF))
+                        time.sleep(3)
+                        break
+                else:
+                    mines[x][y].flag()
+        time.sleep(INPUT_DELAY)
+        cursor.update()
 
+    items.remove(cursor.ptr)
 
-def rotation_puzzle():
-    answer = 39918
-    #def check_bit(i, s):
-    #    if bool(answer & ((15-i) << 1)) == bool(s):
-    #        return True
-    #    return False
-
-    def show_piece(x, y, rot):
-        buffer, width, height = tft1.jpg_decode(f"flip/logo.jpg-{rot}.jpg", x, y, 40, 40)
-        tft1.blit_buffer(buffer, x, y, width, height)
-
-#    puzzle = "logo"
-    while not joy_button.pressed():
-        rot_ul = read_switch_int(2, 0) * 90
-        rot_ur = read_switch_int(2, 2) * 90
-        rot_bl = read_switch_int(2, 4) * 90
-        rot_br = read_switch_int(2, 6) * 90
-        show_piece(0, 0, rot_ul)
-        show_piece(40, 0, rot_ur)
-        show_piece(0, 40, rot_bl)
-        show_piece(40, 40, rot_br)
-
+def pong(cursor):
+    items = displayio.Group()
+    cursor.update()
+    pass
 
 main_menu = Menu("BSidesSLC 2022", OrderedDict([
-#    ("test", test),
-    ("single LED", single_light),
-    ("running LED", running_light),        
-#    ("bubble", bubble),
-#    ("guess", Guesser.run),
-#    ("puzzle", rotation_puzzle),
-#    ("video", video),
+    ("Eyes", eyes),
+    ("Mines", mines),
+    ("Running LED", running_light),        
+    #("Single LED", single_light),
+    ("Pong", pong),
 ]))
-
 
 main_menu.run()
