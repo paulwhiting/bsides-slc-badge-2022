@@ -27,6 +27,8 @@ DISPLAY_HEIGHT = 80
 
 JOY_MIN = -512
 JOY_MAX = 512
+ACCEL_MIN = -2047
+ACCEL_MAX = 2047
 
 displayio.release_displays()
 spi = busio.SPI(board.GP2, board.GP3, board.GP4)
@@ -79,7 +81,7 @@ class Button:
         self.joy = joy
         self.registered = False
         self.waiting_for_release = False
-        self.long_press_delay = 0.4
+        self.long_press_delay = 0.3
 
     def pressed(self):
         self._read()
@@ -190,7 +192,7 @@ class Cursor:
         self.y = DISPLAY_HEIGHT // 2
         self.size = 3
         self.ptr = Circle(self.x, self.y, self.size, fill=0xFFFFFF)
-        self.rate = 10
+        self.rate = 5
 
     def update(self):
         pos = self.joy.getPos()
@@ -201,8 +203,8 @@ class Cursor:
         self.y = min(self.y, DISPLAY_HEIGHT)
         self.y = max(self.y, 0)
 
-        self.ptr.x = self.x - self.size
-        self.ptr.y = self.y - self.size
+        self.ptr.x0 = self.x - self.size
+        self.ptr.y0 = self.y - self.size
 
 def center_offset(text):
     return (DISPLAY_WIDTH - len(text) * 6) // 2
@@ -441,9 +443,17 @@ def mines(cursor):
                         non_mines -= revealed
                         to_reveal += reveal_mines
                     if non_mines <= 0:
+                        for cols in mines:
+                            for mine in cols:
+                                mine.reveal(items)
                         text = "You won!" if non_mines == 0 else "You lost!"
-                        display.show(Label(font, text=text, x=center_offset(text), y=40, color=0xFFFFFF))
-                        time.sleep(3)
+                        margin = center_offset(text)-3
+                        y = DISPLAY_HEIGHT//2-3
+                        items.append(Rect(margin, y-5, DISPLAY_WIDTH-2*margin-3, 16, fill=0x404040))
+                        items.append(Label(font, text=text, x=center_offset(text), y=y, color=0xFFFFFF))
+                        while not joy_button.pressed():
+                            time.sleep(INPUT_DELAY)
+                            cursor.update()
                         break
                 else:
                     mines[x][y].flag()
@@ -452,11 +462,43 @@ def mines(cursor):
 
     items.remove(cursor.ptr)
 
+
+def color_shifter(cursor):
+    items = displayio.Group()
+    background = Rect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, fill=0)
+    items.append(background)
+    al = accel.get_values()
+    x = Label(font, text='', x=0, y=5, color=0x00FF00)
+    y = Label(font, text='', x=0, y=15, color=0x00FF00)
+    z = Label(font, text='', x=0, y=25, color=0x00FF00)
+    items.append(x)
+    items.append(y)
+    items.append(z)
+    display.show(items)
+    while not joy_button.pressed():
+        al = accel.get_values()
+        for i in ['X', 'Y', 'Z']:
+            if al[i] >= 0:
+                al[i] = min(al[i], 1024) // 8
+            else:
+                al[i] = max(al[i], -1016) // 8
+            al[i] += 127
+
+        x.text = str(al['X'])
+        y.text = str(al['Y'])
+        z.text = str(al['Z'])
+        background.fill = (al['X'] << 16) + (al['Y'] << 8) + al['Z']
+        x.color = 0xFFFFFF ^ background.fill
+        y.color = 0xFFFFFF ^ background.fill
+        z.color = 0xFFFFFF ^ background.fill
+        time.sleep(INPUT_DELAY)
+
 main_menu = Menu("BSidesSLC 2022", OrderedDict([
     ("Eyes", eyes),
     ("Mines", mines),
     ("Running LED", running_light),        
     #("Single LED", single_light),
+    ("Color Shifter", color_shifter),
 ]))
 
 main_menu.run()
